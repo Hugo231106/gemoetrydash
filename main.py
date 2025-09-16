@@ -55,13 +55,15 @@ def run():
                     level = Level()
                     player = Player(120, HEIGHT - GROUND_HEIGHT - PLAYER_SIZE)
                     cam_x = 0.0
+                    jump_buffer = 0
                     state = STATE_PLAY
                 elif state == STATE_PLAY and event.key == pygame.K_SPACE:
                     jump_buffer = 6  # allow a small window to jump
 
         keys = pygame.key.get_pressed()
         if state == STATE_PLAY:
-            # Auto-runner: camera moves, player stays mostly near left
+            # Auto-runner: advance the player and camera together
+            player.advance(speed)
             cam_x += speed
 
             # Input: jump
@@ -82,7 +84,7 @@ def run():
                 state = STATE_DEAD
 
             # Win condition
-            if player.rect.centerx + cam_x >= level.finish_x:
+            if player.rect.centerx >= level.finish_x:
                 state = STATE_WIN
 
         # Drawing
