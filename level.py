@@ -1,80 +1,115 @@
+"""Construction du niveau et fonctions utilitaires pour le décor."""
 
 from __future__ import annotations
+
+from typing import Iterable, List, Tuple
+
 import pygame
-from typing import List, Tuple
-from settings import *
-from objects import Ground, Spike, JumpPad, JumpOrb
+
+from objects import GroundSection, Spike
+from settings import (
+    BACKGROUND_COLUMN_SPACING,
+    FINISH_COLOR,
+    FINISH_FLAG_HEIGHT,
+    GROUND_COLOR,
+    GROUND_HEIGHT,
+    HEIGHT,
+    LEVEL_END_OFFSET,
+    PLAYER_SIZE,
+    SPIKE_SIZE,
+    WIDTH,
+)
+
 
 class Level:
-    def __init__(self):
-        self.ground = self._build_ground()
+    """Contient la géométrie d'un niveau et les obstacles à éviter."""
+
+    def __init__(self) -> None:
+        self.sections: List[GroundSection] = []
         self.spikes: List[Spike] = []
-        self.pads: List[JumpPad] = []
-        self.orbs: List[JumpOrb] = []
-        self.finish_x = 0
+        self.background_columns: List[Tuple[float, int]] = []
+        self.player_spawn: Tuple[float, float] = (0.0, 0.0)
+        self.finish_x: float = 0.0
+        self.length: float = 1.0
+        self._build()
 
-        self._build_course()
-
-    def _build_ground(self) -> Ground:
+    def _build(self) -> None:
         base_y = HEIGHT - GROUND_HEIGHT
-        segments = []
-        # Start platform
-        segments.append(pygame.Rect(0, base_y, 1200, GROUND_HEIGHT))
-        # Series of platforms with gaps
-        x = 1200
-        for w, gap in [(500, 200), (400, 160), (700, 240), (600, 180), (900, 260)]:
-            segments.append(pygame.Rect(x, base_y, w, GROUND_HEIGHT))
-            x += w + gap
-        # Long final stretch
-        segments.append(pygame.Rect(x, base_y, 1200, GROUND_HEIGHT))
-        self.finish_x = x + 1100
-        return Ground(segments)
+        layout = [
+            (520, 120),
+            (340, 110),
+            (360, 140),
+            (520, 0),
+        ]
+        x = 0
+        for width, gap in layout:
+            rect = pygame.Rect(int(round(x)), base_y, int(width), GROUND_HEIGHT)
+            self.sections.append(GroundSection(rect, color=GROUND_COLOR))
+            x += width + gap
 
-    def _build_course(self):
-        base_y = HEIGHT - GROUND_HEIGHT
-        # Place spikes clusters
-        def add_spike_cluster(start_x, count, spacing=TILE):
-            for i in range(count):
-                self.spikes.append(Spike(start_x + i*spacing, base_y))
+        if not self.sections:
+            raise RuntimeError("Le niveau doit contenir au moins une section de sol.")
 
-        add_spike_cluster(700, 3)
-        add_spike_cluster(1500, 4)
-        add_spike_cluster(2350, 2)
-        add_spike_cluster(3200, 5, spacing=TILE//1.2)
+        first_section = self.sections[0]
+        self.player_spawn = (
+            first_section.rect.left + 80,
+            first_section.rect.top - PLAYER_SIZE,
+        )
 
-        # Pads
-        self.pads += [
-            JumpPad(1150, base_y, boost=-23),
-            JumpPad(2050, base_y, boost=-25),
-            JumpPad(2700, base_y, boost=-24),
-            JumpPad(3750, base_y, boost=-26),
+        self.spikes = [
+            Spike(300, base_y, size=SPIKE_SIZE),
+            Spike(720, base_y, size=SPIKE_SIZE),
+            Spike(1320, base_y, size=SPIKE_SIZE),
+            Spike(1860, base_y, size=SPIKE_SIZE),
         ]
 
-        # Orbs (need to press jump while inside)
-        self.orbs += [
-            JumpOrb(1680, base_y-100, boost=-18),
-            JumpOrb(2460, base_y-120, boost=-18),
-            JumpOrb(4100, base_y-110, boost=-18),
+        max_right = max(section.rect.right for section in self.sections)
+        self.finish_x = max_right + LEVEL_END_OFFSET
+        self.length = max(1.0, self.finish_x - self.player_spawn[0])
+
+        self._build_background_columns()
+
+    def _build_background_columns(self) -> None:
+        self.background_columns.clear()
+        spacing = BACKGROUND_COLUMN_SPACING
+        x = -WIDTH
+        index = 0
+        while x < self.finish_x + WIDTH:
+            height = 80 + (index % 5) * 24
+            self.background_columns.append((x, height))
+            x += spacing
+            index += 1
+
+    def reset(self) -> None:
+        """Le niveau est statique, mais l'API reste cohérente."""
+
+    def ground_iter(self) -> Iterable[GroundSection]:
+        return self.sections
+
+    def draw(self, surface: pygame.Surface, cam_x: float) -> None:
+        for section in self.sections:
+            section.draw(surface, cam_x)
+        for spike in self.spikes:
+            spike.draw(surface, cam_x)
+        self._draw_finish(surface, cam_x)
+
+    def _draw_finish(self, surface: pygame.Surface, cam_x: float) -> None:
+        pole_x = int(self.finish_x - cam_x)
+        pole_top = HEIGHT - GROUND_HEIGHT - FINISH_FLAG_HEIGHT
+        pole_rect = pygame.Rect(pole_x, pole_top, 8, FINISH_FLAG_HEIGHT)
+        pygame.draw.rect(surface, FINISH_COLOR, pole_rect, border_radius=3)
+        base_rect = pygame.Rect(pole_rect.x - 6, pole_rect.bottom - 6, 20, 12)
+        pygame.draw.rect(surface, FINISH_COLOR, base_rect, border_radius=4)
+        flag_points = [
+            (pole_rect.right, pole_rect.top + 18),
+            (pole_rect.right + 52, pole_rect.top + 6),
+            (pole_rect.right + 52, pole_rect.top + 36),
         ]
+        pygame.draw.polygon(surface, FINISH_COLOR, flag_points)
 
-    def draw(self, surf: pygame.Surface, cam_x: float):
-        self.ground.draw(surf, cam_x)
-        for s in self.spikes:
-            s.draw(surf, cam_x)
-        for p in self.pads:
-            p.draw(surf, cam_x)
-        for o in self.orbs:
-            o.draw(surf, cam_x)
+    def hits_spike(self, player_rect: pygame.Rect) -> bool:
+        return any(spike.collides(player_rect) for spike in self.spikes)
 
-    def try_activate_interactives(self, player_rect, player_vel_y, jump_pressed):
-        # Pads auto-activate
-        for p in self.pads:
-            hit, vy = p.try_activate(player_rect, player_vel_y)
-            if hit:
-                player_vel_y = vy
-        # Orbs require jump pressed and overlap
-        if jump_pressed:
-            for o in self.orbs:
-                if o.inside(player_rect):
-                    player_vel_y = o.boost
-        return player_vel_y
+    def progress(self, x: float) -> float:
+        ratio = (x - self.player_spawn[0]) / self.length
+        return max(0.0, min(1.0, ratio))

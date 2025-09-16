@@ -1,166 +1,202 @@
+"""Définition des objets principaux du jeu."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable, Tuple
+
 import pygame
 from pygame import Rect
-from dataclasses import dataclass
-from typing import List, Tuple
-from settings import *
+
+from settings import (
+    AIR_ROTATION_SPEED,
+    COYOTE_FRAMES,
+    GRAVITY,
+    GROUND_COLOR,
+    GROUND_HIGHLIGHT,
+    JUMP_FORCE,
+    MAX_FALL_SPEED,
+    PLAYER_BORDER_COLOR,
+    PLAYER_COLOR,
+    PLAYER_SIZE,
+    SHADOW_COLOR,
+    SPIKE_COLOR,
+    SPIKE_SIZE,
+)
+
+
+@dataclass
+class GroundSection:
+    """Plateforme rectangulaire sur laquelle le joueur peut courir."""
+
+    rect: Rect
+    color: Tuple[int, int, int] = GROUND_COLOR
+    highlight: Tuple[int, int, int] = GROUND_HIGHLIGHT
+
+    def draw(self, surface: pygame.Surface, cam_x: float) -> None:
+        dest = self.rect.move(-cam_x, 0)
+        pygame.draw.rect(surface, self.color, dest)
+        highlight_rect = pygame.Rect(dest.x, dest.y, dest.width, 6)
+        pygame.draw.rect(surface, self.highlight, highlight_rect)
+
 
 @dataclass
 class Spike:
+    """Obstacle triangulaire classique de Geometry Dash."""
+
     x: float
     base_y: float
-    size: int = TILE
-    color: Tuple[int,int,int] = SPIKE_COLOR
+    size: int = SPIKE_SIZE
+    color: Tuple[int, int, int] = SPIKE_COLOR
 
     @property
     def rect(self) -> Rect:
-        return Rect(int(self.x), int(self.base_y - self.size), self.size, self.size)
+        return Rect(int(self.x), int(self.base_y - self.size), int(self.size), int(self.size))
 
-    def draw(self, surf: pygame.Surface, cam_x: float):
-        x = int(self.x - cam_x)
-        y = int(self.base_y)
-        points = [(x, y), (x + self.size//2, y - self.size), (x + self.size, y)]
-        pygame.draw.polygon(surf, self.color, points)
+    def draw(self, surface: pygame.Surface, cam_x: float) -> None:
+        sx = self.x - cam_x
+        points = [
+            (int(sx), int(self.base_y)),
+            (int(sx + self.size / 2), int(self.base_y - self.size)),
+            (int(sx + self.size), int(self.base_y)),
+        ]
+        pygame.draw.polygon(surface, self.color, points)
 
-    def collide(self, player_rect: Rect) -> bool:
-        # Conservative collision: if player's rect intersects the bounding rect,
-        # do a simple half-plane test for the triangle.
-        r = self.rect
-        if not r.colliderect(player_rect):
+    def collides(self, player_rect: Rect) -> bool:
+        spike_box = self.rect
+        if not spike_box.colliderect(player_rect):
             return False
-        # Triangle points (A,B,C) with B apex
-        A = (r.left, r.bottom)
-        B = (r.centerx, r.top)
-        C = (r.right, r.bottom)
-        # We'll test player's bottom vertices; if either is above triangle edge lines, it's a hit.
-        px_left = (player_rect.left, player_rect.bottom)
-        px_right = (player_rect.right, player_rect.bottom)
-        return self.point_in_triangle(px_left, A,B,C) or self.point_in_triangle(px_right, A,B,C) or r.colliderect(player_rect)
+        a = (spike_box.left, spike_box.bottom)
+        b = (spike_box.centerx, spike_box.top)
+        c = (spike_box.right, spike_box.bottom)
+        test_points = [
+            (player_rect.left, player_rect.bottom),
+            (player_rect.right, player_rect.bottom),
+            (player_rect.centerx, player_rect.centery),
+        ]
+        return any(_point_in_triangle(p, a, b, c) for p in test_points)
 
-    @staticmethod
-    def point_in_triangle(p, a,b,c):
-        # Barycentric technique
-        (x, y) = p
-        (x1,y1) = a; (x2,y2) = b; (x3,y3) = c
-        denom = (y2 - y3)*(x1 - x3) + (x3 - x2)*(y1 - y3)
-        if denom == 0:
-            return False
-        w1 = ((y2 - y3)*(x - x3) + (x3 - x2)*(y - y3)) / denom
-        w2 = ((y3 - y1)*(x - x3) + (x1 - x3)*(y - y3)) / denom
-        w3 = 1 - w1 - w2
-        return (0 <= w1 <= 1) and (0 <= w2 <= 1) and (0 <= w3 <= 1)
 
-@dataclass
-class JumpPad:
-    x: float
-    y: float
-    w: int = TILE
-    h: int = TILE//4
-    boost: float = -24.0
-    color: Tuple[int,int,int] = PAD_COLOR
+def _point_in_triangle(p: Tuple[int, int], a, b, c) -> bool:
+    (px, py) = p
+    (ax, ay) = a
+    (bx, by) = b
+    (cx, cy) = c
+    denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+    if denom == 0:
+        return False
+    u = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom
+    v = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom
+    w = 1 - u - v
+    return 0 <= u <= 1 and 0 <= v <= 1 and 0 <= w <= 1
 
-    @property
-    def rect(self) -> Rect:
-        return Rect(int(self.x), int(self.y - self.h), self.w, self.h)
-
-    def draw(self, surf: pygame.Surface, cam_x: float):
-        r = self.rect.move(-cam_x, 0)
-        pygame.draw.rect(surf, self.color, r, border_radius=6)
-
-    def try_activate(self, player_rect: Rect, vel_y: float) -> Tuple[bool, float]:
-        if self.rect.colliderect(player_rect):
-            return True, self.boost
-        return False, vel_y
-
-@dataclass
-class JumpOrb:
-    x: float
-    y: float
-    radius: int = TILE//3
-    boost: float = -21.0
-    color: Tuple[int,int,int] = ORB_COLOR
-
-    @property
-    def rect(self) -> Rect:
-        return Rect(int(self.x - self.radius), int(self.y - self.radius), self.radius*2, self.radius*2)
-
-    def draw(self, surf: pygame.Surface, cam_x: float):
-        pygame.draw.circle(surf, self.color, (int(self.x - cam_x), int(self.y)), self.radius, 3)
-
-    def inside(self, player_rect: Rect) -> bool:
-        return self.rect.colliderect(player_rect)
-
-class Ground:
-    def __init__(self, segments: List[pygame.Rect]):
-        self.segments = segments
-
-    def draw(self, surf: pygame.Surface, cam_x: float):
-        for seg in self.segments:
-            pygame.draw.rect(surf, GROUND_COLOR, seg.move(-cam_x, 0))
-
-    def collide(self, rect: Rect) -> pygame.Rect | None:
-        for seg in self.segments:
-            if seg.colliderect(rect):
-                return seg
-        return None
 
 class Player:
-    def __init__(self, x, y):
-        self.rect = pygame.Rect(x, y, PLAYER_SIZE, PLAYER_SIZE)
-        self._pos_x = float(self.rect.x)
-        self.vel_y = 0
-        self.on_ground = False
-        self.rotation = 0.0  # for fun
+    """Cube du joueur, avec gestion de la physique et du rendu."""
 
-    def advance(self, dx: float):
-        """Move the player forward while keeping float precision."""
+    def __init__(self, spawn: Tuple[float, float]):
+        self.spawn_point = (float(spawn[0]), float(spawn[1]))
+        self.rect = pygame.Rect(int(spawn[0]), int(spawn[1]), PLAYER_SIZE, PLAYER_SIZE)
+        self._pos_x = float(self.rect.x)
+        self._pos_y = float(self.rect.y)
+        self.prev_top = self.rect.top
+        self.prev_bottom = self.rect.bottom
+        self.vel_y = 0.0
+        self.on_ground = True
+        self.coyote_frames = COYOTE_FRAMES
+        self.rotation = 0.0
+        self._base_surface = self._create_base_surface()
+        self._shadow_surface = self._create_shadow_surface()
+        self.reset(spawn)
+
+    def _create_base_surface(self) -> pygame.Surface:
+        surf = pygame.Surface((PLAYER_SIZE, PLAYER_SIZE), pygame.SRCALPHA)
+        pygame.draw.rect(surf, PLAYER_BORDER_COLOR, (0, 0, PLAYER_SIZE, PLAYER_SIZE), border_radius=10)
+        pygame.draw.rect(surf, PLAYER_COLOR, (4, 4, PLAYER_SIZE - 8, PLAYER_SIZE - 8), border_radius=8)
+        pygame.draw.circle(surf, (255, 255, 255, 90), (PLAYER_SIZE - 10, 10), 6)
+        return surf
+
+    def _create_shadow_surface(self) -> pygame.Surface:
+        width = PLAYER_SIZE + 14
+        height = max(6, PLAYER_SIZE // 3)
+        surf = pygame.Surface((width, height), pygame.SRCALPHA)
+        pygame.draw.ellipse(surf, SHADOW_COLOR, surf.get_rect())
+        return surf
+
+    def reset(self, spawn: Tuple[float, float] | None = None) -> None:
+        if spawn is not None:
+            self.spawn_point = (float(spawn[0]), float(spawn[1]))
+        x, y = self.spawn_point
+        self.rect.update(int(x), int(y), PLAYER_SIZE, PLAYER_SIZE)
+        self._pos_x = float(self.rect.x)
+        self._pos_y = float(self.rect.y)
+        self.prev_top = self.rect.top
+        self.prev_bottom = self.rect.bottom
+        self.vel_y = 0.0
+        self.on_ground = True
+        self.coyote_frames = COYOTE_FRAMES
+        self.rotation = 0.0
+
+    def advance(self, dx: float) -> None:
         self._pos_x += dx
         self.rect.x = int(round(self._pos_x))
 
-    def update(self, ground: Ground, spikes: List[Spike]):
-        # Apply gravity
-        self.vel_y += GRAVITY
-        self.rect.y += int(self.vel_y)
+    def apply_gravity(self, scale: float = 1.0) -> None:
+        self.prev_top = self.rect.top
+        self.prev_bottom = self.rect.bottom
+        self.vel_y = min(self.vel_y + GRAVITY * scale, MAX_FALL_SPEED)
+        self._pos_y += self.vel_y * scale
+        self.rect.y = int(round(self._pos_y))
 
-        # Ground collision
-        hit = ground.collide(self.rect)
-        if hit:
-            if self.vel_y >= 0:
-                self.rect.bottom = hit.top
-                self.vel_y = 0
+    def handle_ground(self, sections: Iterable[GroundSection]) -> None:
+        landed = False
+        for section in sections:
+            tile = section.rect
+            if not self.rect.colliderect(tile):
+                continue
+            if self.vel_y >= 0 and self.prev_bottom <= tile.top:
+                self.rect.bottom = tile.top
+                self._pos_y = float(self.rect.y)
+                self.vel_y = 0.0
                 self.on_ground = True
+                self.coyote_frames = COYOTE_FRAMES
+                landed = True
+                break
+            if self.vel_y < 0 and self.prev_top >= tile.bottom:
+                self.rect.top = tile.bottom
+                self._pos_y = float(self.rect.y)
+                self.vel_y = 0.0
+                break
+        if not landed:
+            if self.coyote_frames > 0:
+                self.coyote_frames -= 1
             else:
-                self.rect.top = hit.bottom
-                self.vel_y = 0
                 self.on_ground = False
+
+    def can_jump(self) -> bool:
+        return self.on_ground or self.coyote_frames > 0
+
+    def jump(self) -> None:
+        self.vel_y = JUMP_FORCE
+        self.on_ground = False
+        self.coyote_frames = 0
+        self._pos_y = float(self.rect.y)
+
+    def update_rotation(self) -> None:
+        if self.on_ground:
+            self.rotation = 0.0
         else:
-            self.on_ground = False
+            self.rotation = (self.rotation + AIR_ROTATION_SPEED) % 360
 
-        # Rotate while airborne for style
-        if not self.on_ground:
-            self.rotation = (self.rotation + 8) % 360
-        else:
-            self.rotation = 0
+    def draw(self, surface: pygame.Surface, cam_x: float) -> None:
+        shadow_pos = (
+            int(self.rect.centerx - cam_x - self._shadow_surface.get_width() / 2),
+            int(self.rect.bottom + 6 - self._shadow_surface.get_height() / 2),
+        )
+        surface.blit(self._shadow_surface, shadow_pos)
+        rotated = pygame.transform.rotate(self._base_surface, self.rotation)
+        dest = rotated.get_rect(center=(int(self.rect.centerx - cam_x), int(self.rect.centery)))
+        surface.blit(rotated, dest)
 
-        # Spike collision
-        for s in spikes:
-            if s.collide(self.rect):
-                return True  # dead
-        return False
-
-    def jump(self, strength: float = JUMP_VELOCITY):
-        # Can always jump if grounded; otherwise small coyote time feel
-        if self.on_ground or self.vel_y > -2:
-            self.vel_y = strength
-
-    def draw(self, surf: pygame.Surface, cam_x: float):
-        # Draw as a rotated square
-        center = (int(self.rect.centerx - cam_x), int(self.rect.centery))
-        size = self.rect.width
-        # Create a small surface to rotate
-        s = pygame.Surface((size, size), pygame.SRCALPHA)
-        pygame.draw.rect(s, PLAYER_COLOR, (0, 0, size, size), border_radius=6)
-        rs = pygame.transform.rotate(s, self.rotation)
-        r = rs.get_rect(center=center)
-        surf.blit(rs, r.topleft)
+    def hits_spikes(self, spikes: Iterable[Spike]) -> bool:
+        return any(spike.collides(self.rect) for spike in spikes)
