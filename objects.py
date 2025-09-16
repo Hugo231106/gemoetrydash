@@ -108,9 +108,15 @@ class Ground:
 class Player:
     def __init__(self, x, y):
         self.rect = pygame.Rect(x, y, PLAYER_SIZE, PLAYER_SIZE)
+        self._pos_x = float(self.rect.x)
         self.vel_y = 0
         self.on_ground = False
         self.rotation = 0.0  # for fun
+
+    def advance(self, dx: float):
+        """Move the player forward while keeping float precision."""
+        self._pos_x += dx
+        self.rect.x = int(round(self._pos_x))
 
     def update(self, ground: Ground, spikes: List[Spike]):
         # Apply gravity
